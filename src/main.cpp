@@ -30,21 +30,9 @@
 #define GATEWAY_MAC_5 0x3C
 #endif
 
-// Must match gateway channel.
-#if defined(WIFI_PROFILE_HOME)
-#define WIFI_SSID "Tien Thuat"
-#define WIFI_PASSWORD "07112004tien"
-#elif defined(WIFI_PROFILE_OFFICE)
-#define WIFI_SSID "OrsCorp"
-#define WIFI_PASSWORD "Tamchiduc68"
-#endif
-
-#ifndef WIFI_SSID
-#define WIFI_SSID "OrsCorp"
-#endif
-#ifndef WIFI_PASSWORD
-#define WIFI_PASSWORD "Tamchiduc68"
-#endif
+// Single WiFi profile (must match gateway channel).
+#define WIFI_SSID "Khanh Hoa"
+#define WIFI_PASSWORD "phukhanh"
 
 // Relay pins: GPIO23 -> Pump, GPIO22 -> Light.
 const int PUMP_RELAY_PIN = 23;
@@ -80,6 +68,7 @@ typedef struct struct_message {
   uint8_t message_type;
   uint32_t uptime_sec;
   uint32_t heartbeat_seq;
+  char status_kv[96];
 } struct_message;
 
 typedef struct control_command_message {
@@ -93,6 +82,8 @@ typedef struct control_command_message {
 
 struct_message heartbeatData;
 uint32_t heartbeatSeq = 0;
+bool pumpOn = false;
+bool lightOn = false;
 
 uint8_t resolveWifiChannel() {
   WiFi.mode(WIFI_STA);
@@ -127,17 +118,31 @@ void setRelay(int pin, bool on) {
   }
 }
 
+void updateStatusKv() {
+  snprintf(
+    heartbeatData.status_kv,
+    sizeof(heartbeatData.status_kv),
+    "v=1;d=pump;k=digital;s=%s;d=light;k=digital;s=%s",
+    pumpOn ? "on" : "off",
+    lightOn ? "on" : "off"
+  );
+}
+
 void applyCommand(const control_command_message &command) {
   bool turnOn = strcmp(command.state, "on") == 0;
 
   if (strcmp(command.device, "pump") == 0) {
     setRelay(PUMP_RELAY_PIN, turnOn);
+    pumpOn = turnOn;
+    updateStatusKv();
     Serial.printf("Pump %s (seq=%lu)\n", turnOn ? "ON" : "OFF", (unsigned long)command.command_seq);
     return;
   }
 
   if (strcmp(command.device, "light") == 0) {
     setRelay(LIGHT_RELAY_PIN, turnOn);
+    lightOn = turnOn;
+    updateStatusKv();
     Serial.printf("Light %s (seq=%lu)\n", turnOn ? "ON" : "OFF", (unsigned long)command.command_seq);
     return;
   }
@@ -176,6 +181,7 @@ void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 }
 
 void sendHeartbeat() {
+  updateStatusKv();
   heartbeatData.sensor_timestamp = millis();
   heartbeatData.rssi = WiFi.RSSI();
   heartbeatData.message_type = MSG_TYPE_HEARTBEAT;
@@ -200,12 +206,15 @@ void setup() {
 
   pinMode(PUMP_RELAY_PIN, OUTPUT);
   pinMode(LIGHT_RELAY_PIN, OUTPUT);
-  setRelay(PUMP_RELAY_PIN, false);
-  setRelay(LIGHT_RELAY_PIN, false);
+  pumpOn = false;
+  lightOn = false;
+  setRelay(PUMP_RELAY_PIN, pumpOn);
+  setRelay(LIGHT_RELAY_PIN, lightOn);
 
   memset(&heartbeatData, 0, sizeof(heartbeatData));
   strncpy(heartbeatData.device_id, DEVICE_ID, sizeof(heartbeatData.device_id) - 1);
   strncpy(heartbeatData.node_id, NODE_ID, sizeof(heartbeatData.node_id) - 1);
+  updateStatusKv();
 
   uint8_t wifiChannel = resolveWifiChannel();
   WiFi.mode(WIFI_STA);
