@@ -31,8 +31,8 @@
 #endif
 
 // Single WiFi profile (must match gateway channel).
-#define WIFI_SSID "Khanh Hoa"
-#define WIFI_PASSWORD "phukhanh"
+#define WIFI_SSID "OrsCorp"
+#define WIFI_PASSWORD "Tamchiduc68"
 
 // Relay pins: GPIO23 -> Pump, GPIO22 -> Light.
 const int PUMP_RELAY_PIN = 23;
@@ -161,11 +161,6 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
 
   if (strcmp(command.node_id, NODE_ID) != 0) {
     Serial.printf("Command for other node: %s\n", command.node_id);
-    return;
-  }
-
-  if (strcmp(command.action_type, "relay_control") != 0) {
-    Serial.printf("Unsupported action_type: %s\n", command.action_type);
     return;
   }
 
