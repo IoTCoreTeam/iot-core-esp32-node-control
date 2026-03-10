@@ -21,13 +21,13 @@
 #define GATEWAY_MAC_2 0x07
 #endif
 #ifndef GATEWAY_MAC_3
-#define GATEWAY_MAC_3 0x7E
+#define GATEWAY_MAC_3 0xE6
 #endif
 #ifndef GATEWAY_MAC_4
 #define GATEWAY_MAC_4 0x7D
 #endif
 #ifndef GATEWAY_MAC_5
-#define GATEWAY_MAC_5 0x3C
+#define GATEWAY_MAC_5 0x14
 #endif
 
 // Single WiFi profile (must match gateway channel).
