@@ -17,6 +17,12 @@ Home WiFi:
   - `GPIO23` -> pump
   - `GPIO22` -> light
 - Sends node heartbeat every 5 seconds.
+- Sends an immediate controller status event after every command is handled.
+- The status event includes command result metadata in `status_kv`:
+  - `cmd`: command sequence from gateway
+  - `cd`: device (`pump` / `light`)
+  - `ct`: requested target state
+  - `cr`: execution result (`applied`, `invalid_state`, `unknown_device`)
 - WiFi channel is resolved automatically from configured SSID.
 
 ## MAC Configuration

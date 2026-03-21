@@ -40,6 +40,7 @@ const int LIGHT_RELAY_PIN = 22;
 const bool RELAY_ACTIVE_LOW = true;
 
 const uint8_t MSG_TYPE_HEARTBEAT = 2;
+const uint8_t MSG_TYPE_STATUS_EVENT = 3;
 const uint32_t HEARTBEAT_INTERVAL_MS = 5000;
 
 uint8_t gatewayAddress[] = {
@@ -85,6 +86,22 @@ uint32_t heartbeatSeq = 0;
 bool pumpOn = false;
 bool lightOn = false;
 
+struct CommandResultContext {
+  uint32_t seq;
+  char device[16];
+  char state[8];
+  char result[16];
+  bool pending;
+};
+
+enum CommandApplyResult : uint8_t {
+  COMMAND_APPLIED = 1,
+  COMMAND_INVALID_STATE = 2,
+  COMMAND_UNKNOWN_DEVICE = 3,
+};
+
+CommandResultContext lastCommandResult = {};
+
 uint8_t resolveWifiChannel() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -118,7 +135,55 @@ void setRelay(int pin, bool on) {
   }
 }
 
-void updateStatusKv() {
+void copyStringField(char* dest, size_t destSize, const char* value) {
+  if (!dest || destSize == 0) {
+    return;
+  }
+  dest[0] = '\0';
+  if (!value) {
+    return;
+  }
+  strncpy(dest, value, destSize - 1);
+  dest[destSize - 1] = '\0';
+}
+
+const char* commandApplyResultToString(CommandApplyResult result) {
+  switch (result) {
+    case COMMAND_APPLIED:
+      return "applied";
+    case COMMAND_INVALID_STATE:
+      return "invalid_state";
+    case COMMAND_UNKNOWN_DEVICE:
+      return "unknown_device";
+    default:
+      return "unknown";
+  }
+}
+
+void rememberCommandResult(const control_command_message &command, CommandApplyResult result) {
+  lastCommandResult.seq = command.command_seq;
+  copyStringField(lastCommandResult.device, sizeof(lastCommandResult.device), command.device);
+  copyStringField(lastCommandResult.state, sizeof(lastCommandResult.state), command.state);
+  copyStringField(lastCommandResult.result, sizeof(lastCommandResult.result), commandApplyResultToString(result));
+  lastCommandResult.pending = true;
+}
+
+void updateStatusKv(bool includeCommandResult = false) {
+  if (includeCommandResult && lastCommandResult.pending) {
+    snprintf(
+      heartbeatData.status_kv,
+      sizeof(heartbeatData.status_kv),
+      "v=1;cmd=%lu;cd=%s;ct=%s;cr=%s;d=pump;k=digital;s=%s;d=light;k=digital;s=%s",
+      (unsigned long)lastCommandResult.seq,
+      lastCommandResult.device,
+      lastCommandResult.state,
+      lastCommandResult.result,
+      pumpOn ? "on" : "off",
+      lightOn ? "on" : "off"
+    );
+    return;
+  }
+
   snprintf(
     heartbeatData.status_kv,
     sizeof(heartbeatData.status_kv),
@@ -128,26 +193,69 @@ void updateStatusKv() {
   );
 }
 
-void applyCommand(const control_command_message &command) {
-  bool turnOn = strcmp(command.state, "on") == 0;
+bool sendNodeUpdate(uint8_t messageType, const char *label, bool includeCommandResult = false) {
+  updateStatusKv(includeCommandResult);
+  heartbeatData.sensor_timestamp = millis();
+  heartbeatData.rssi = WiFi.RSSI();
+  heartbeatData.message_type = messageType;
+  heartbeatData.uptime_sec = millis() / 1000;
+  heartbeatData.heartbeat_seq = ++heartbeatSeq;
+
+  esp_err_t result = esp_now_send(
+    gatewayAddress,
+    reinterpret_cast<const uint8_t *>(&heartbeatData),
+    sizeof(heartbeatData)
+  );
+
+  if (result != ESP_OK) {
+    Serial.printf("%s enqueue failed: %d\n", label, result);
+    return false;
+  }
+
+  return true;
+}
+
+void sendHeartbeat() {
+  sendNodeUpdate(MSG_TYPE_HEARTBEAT, "Heartbeat");
+}
+
+void sendStatusEvent() {
+  if (sendNodeUpdate(MSG_TYPE_STATUS_EVENT, "Status event", true)) {
+    lastCommandResult.pending = false;
+    Serial.println("Status event queued");
+  }
+}
+
+CommandApplyResult applyCommand(const control_command_message &command) {
+  const bool turnOn = strcmp(command.state, "on") == 0;
+  const bool turnOff = strcmp(command.state, "off") == 0;
+
+  if (!turnOn && !turnOff) {
+    Serial.printf(
+      "Invalid state for %s: %s (seq=%lu)\n",
+      command.device,
+      command.state,
+      (unsigned long)command.command_seq
+    );
+    return COMMAND_INVALID_STATE;
+  }
 
   if (strcmp(command.device, "pump") == 0) {
     setRelay(PUMP_RELAY_PIN, turnOn);
     pumpOn = turnOn;
-    updateStatusKv();
     Serial.printf("Pump %s (seq=%lu)\n", turnOn ? "ON" : "OFF", (unsigned long)command.command_seq);
-    return;
+    return COMMAND_APPLIED;
   }
 
   if (strcmp(command.device, "light") == 0) {
     setRelay(LIGHT_RELAY_PIN, turnOn);
     lightOn = turnOn;
-    updateStatusKv();
     Serial.printf("Light %s (seq=%lu)\n", turnOn ? "ON" : "OFF", (unsigned long)command.command_seq);
-    return;
+    return COMMAND_APPLIED;
   }
 
-  Serial.printf("Unknown device: %s\n", command.device);
+  Serial.printf("Unknown device: %s (seq=%lu)\n", command.device, (unsigned long)command.command_seq);
+  return COMMAND_UNKNOWN_DEVICE;
 }
 
 void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
@@ -164,33 +272,16 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     return;
   }
 
-  applyCommand(command);
+  CommandApplyResult result = applyCommand(command);
+  rememberCommandResult(command, result);
+  sendStatusEvent();
 }
 
 void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   if (status == ESP_NOW_SEND_SUCCESS) {
-    Serial.println("Heartbeat sent");
+    Serial.println("Controller update sent");
   } else {
-    Serial.println("Heartbeat send failed");
-  }
-}
-
-void sendHeartbeat() {
-  updateStatusKv();
-  heartbeatData.sensor_timestamp = millis();
-  heartbeatData.rssi = WiFi.RSSI();
-  heartbeatData.message_type = MSG_TYPE_HEARTBEAT;
-  heartbeatData.uptime_sec = millis() / 1000;
-  heartbeatData.heartbeat_seq = ++heartbeatSeq;
-
-  esp_err_t result = esp_now_send(
-    gatewayAddress,
-    reinterpret_cast<const uint8_t *>(&heartbeatData),
-    sizeof(heartbeatData)
-  );
-
-  if (result != ESP_OK) {
-    Serial.printf("Heartbeat enqueue failed: %d\n", result);
+    Serial.println("Controller update send failed");
   }
 }
 
