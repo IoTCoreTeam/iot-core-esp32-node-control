@@ -69,7 +69,7 @@ typedef struct struct_message {
   uint8_t message_type;
   uint32_t uptime_sec;
   uint32_t heartbeat_seq;
-  char status_kv[96];
+  char status_kv[128];
 } struct_message;
 
 typedef struct control_command_message {
@@ -88,6 +88,7 @@ bool lightOn = false;
 
 struct CommandResultContext {
   uint32_t seq;
+  uint32_t execMs;
   char device[16];
   char state[8];
   char result[16];
@@ -160,8 +161,9 @@ const char* commandApplyResultToString(CommandApplyResult result) {
   }
 }
 
-void rememberCommandResult(const control_command_message &command, CommandApplyResult result) {
+void rememberCommandResult(const control_command_message &command, CommandApplyResult result, uint32_t execMs) {
   lastCommandResult.seq = command.command_seq;
+  lastCommandResult.execMs = execMs;
   copyStringField(lastCommandResult.device, sizeof(lastCommandResult.device), command.device);
   copyStringField(lastCommandResult.state, sizeof(lastCommandResult.state), command.state);
   copyStringField(lastCommandResult.result, sizeof(lastCommandResult.result), commandApplyResultToString(result));
@@ -173,8 +175,9 @@ void updateStatusKv(bool includeCommandResult = false) {
     snprintf(
       heartbeatData.status_kv,
       sizeof(heartbeatData.status_kv),
-      "v=1;cmd=%lu;cd=%s;ct=%s;cr=%s;d=pump;k=digital;s=%s;d=light;k=digital;s=%s",
+      "v=1;cmd=%lu;ce=%lu;cd=%s;ct=%s;cr=%s;d=pump;k=digital;s=%s;d=light;k=digital;s=%s",
       (unsigned long)lastCommandResult.seq,
+      (unsigned long)lastCommandResult.execMs,
       lastCommandResult.device,
       lastCommandResult.state,
       lastCommandResult.result,
@@ -259,6 +262,8 @@ CommandApplyResult applyCommand(const control_command_message &command) {
 }
 
 void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
+  const uint32_t commandReceiveStartedAt = millis();
+
   if (len < (int)sizeof(control_command_message)) {
     Serial.printf("Ignored payload len=%d\n", len);
     return;
@@ -273,7 +278,8 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   }
 
   CommandApplyResult result = applyCommand(command);
-  rememberCommandResult(command, result);
+  const uint32_t execMs = millis() - commandReceiveStartedAt;
+  rememberCommandResult(command, result, execMs);
   sendStatusEvent();
 }
 
