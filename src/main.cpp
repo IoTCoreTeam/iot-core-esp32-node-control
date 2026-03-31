@@ -7,7 +7,7 @@
 #endif
 
 #ifndef DEVICE_ID
-#define DEVICE_ID "actuator-control-001"
+#define DEVICE_ID "controller-001"
 #endif
 
 // Update MAC to your gateway MAC address.
@@ -42,6 +42,7 @@ const bool RELAY_ACTIVE_LOW = true;
 const uint8_t MSG_TYPE_HEARTBEAT = 2;
 const uint8_t MSG_TYPE_STATUS_EVENT = 3;
 const uint32_t HEARTBEAT_INTERVAL_MS = 5000;
+const char* NODE_TYPE = "node-control";
 
 uint8_t gatewayAddress[] = {
   GATEWAY_MAC_0,
@@ -55,6 +56,7 @@ uint8_t gatewayAddress[] = {
 typedef struct struct_message {
   char device_id[32];
   char node_id[32];
+  char node_type[16];
   float temperature;
   float humidity;
   int light_raw;
@@ -69,8 +71,10 @@ typedef struct struct_message {
   uint8_t message_type;
   uint32_t uptime_sec;
   uint32_t heartbeat_seq;
-  char status_kv[128];
+  char status_kv[116];
 } struct_message;
+
+static_assert(sizeof(struct_message) <= ESP_NOW_MAX_DATA_LEN, "struct_message exceeds ESP-NOW payload limit");
 
 typedef struct control_command_message {
   char gateway_id[32];
@@ -294,7 +298,7 @@ void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\nESP32 Control Node booting...");
+  Serial.println("\nESP32 Controller booting...");
 
   pinMode(PUMP_RELAY_PIN, OUTPUT);
   pinMode(LIGHT_RELAY_PIN, OUTPUT);
@@ -306,6 +310,7 @@ void setup() {
   memset(&heartbeatData, 0, sizeof(heartbeatData));
   strncpy(heartbeatData.device_id, DEVICE_ID, sizeof(heartbeatData.device_id) - 1);
   strncpy(heartbeatData.node_id, NODE_ID, sizeof(heartbeatData.node_id) - 1);
+  strncpy(heartbeatData.node_type, NODE_TYPE, sizeof(heartbeatData.node_type) - 1);
   updateStatusKv();
 
   uint8_t wifiChannel = resolveWifiChannel();
@@ -340,7 +345,7 @@ void setup() {
   Serial.println(NODE_ID);
   Serial.print("Device ID: ");
   Serial.println(DEVICE_ID);
-  Serial.print("Control node MAC: ");
+  Serial.print("Controller MAC: ");
   Serial.println(WiFi.macAddress());
 
   sendHeartbeat();
